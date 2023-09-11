@@ -1,8 +1,6 @@
-# A Fast Chess Library In Rust
+# A Fast Chess Library In Rust Modified to Perform Uno-Chess
+Please refer to [Uno-Chess](https://github.com/AaronvDiepen/uno-chess) for easy building
 
-[![Build Status](https://travis-ci.org/jordanbray/chess.svg?branch=master)](https://travis-ci.org/jordanbray/chess)
-[![crates.io](https://img.shields.io/crates/v/chess.svg)](https://crates.io/crates/chess)
-[![docs.rs](https://docs.rs/chess/badge.svg)](https://jordanbray.github.io/chess/chess/)
 
 This library handles the process of move generation within a chess engine or chess UI.
 
@@ -17,6 +15,9 @@ This library follows semver for version numbering in the format MAJOR.MINOR.PATC
 This library requires rust version 1.27 or greater in order to check for the BMI2 instruction-set at compile-time.  Additionally, this build is compatible with rust 2018 which, I believe, requires rust 1.31.
 
 > Note: bmi2 has been disabled due to horrible performance on AMD architectures.  I have instead opted to expose the two relevant functions publicly if on a bmi2 CPU.
+
+## Uno-Chess
+Uno-Chess is a modification of normal chess in which capture rules have been reversed. A piece can only be captured by any piece in its normal attacking positions. So keep in mind that pawns are more valuable than queens and kings can only be checked from their 8 surrounding squares.
 
 ## Examples
 

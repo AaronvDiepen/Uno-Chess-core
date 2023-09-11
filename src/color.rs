@@ -1,4 +1,4 @@
-use crate::rank::Rank;
+use crate::{rank::Rank, bitboard::BitBoard};
 use std::ops::Not;
 
 /// Represent a color.
@@ -65,6 +65,15 @@ impl Color {
         match *self {
             Color::White => Rank::Seventh,
             Color::Black => Rank::Second,
+        }
+    }
+
+    /// Convert a `Color` to a bit board that contains all the promotion squares
+    #[inline]
+    pub fn to_promotion_board(&self) -> BitBoard {
+        match *self {
+            Color::White => BitBoard(0b1111111100000000000000000000000000000000000000000000000000000000),
+            Color::Black => BitBoard(0b0000000000000000000000000000000000000000000000000000000011111111),
         }
     }
 }

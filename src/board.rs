@@ -6,9 +6,7 @@ use crate::color::{Color, ALL_COLORS, NUM_COLORS};
 use crate::error::Error;
 use crate::file::File;
 use crate::magic::{
-    between, get_adjacent_files, get_bishop_rays, get_castle_moves, get_file, get_king_moves,
-    get_knight_moves, get_pawn_attacks, get_pawn_dest_double_moves, get_pawn_source_double_moves,
-    get_rank, get_rook_rays,
+    get_castle_moves, get_file, get_king_moves, get_rank,
 };
 use crate::movegen::*;
 use crate::piece::{Piece, ALL_PIECES, NUM_PIECES};
@@ -17,7 +15,6 @@ use crate::zobrist::Zobrist;
 use std::convert::{TryFrom, TryInto};
 use std::fmt;
 use std::hash::{Hash, Hasher};
-use std::mem;
 use std::str::FromStr;
 
 /// A representation of a chess board.  That's why you're here, right?
@@ -28,10 +25,8 @@ pub struct Board {
     combined: BitBoard,
     side_to_move: Color,
     castle_rights: [CastleRights; NUM_COLORS],
-    pinned: BitBoard,
     checkers: BitBoard,
     hash: u64,
-    en_passant: Option<Square>,
 }
 
 /// What is the status of this game?
@@ -67,10 +62,8 @@ impl Board {
             combined: EMPTY,
             side_to_move: Color::White,
             castle_rights: [CastleRights::NoRights; NUM_COLORS],
-            pinned: EMPTY,
             checkers: EMPTY,
             hash: 0,
-            en_passant: None,
         }
     }
 
@@ -481,14 +474,14 @@ impl Board {
         // If setting this piece down leaves my opponent in check, and it's my move, then the
         // position is not a valid chess board
         result.side_to_move = !result.side_to_move;
-        result.update_pin_info();
+        result.update_check_info();
         if result.checkers != EMPTY {
             return None;
         }
 
         // undo our damage
         result.side_to_move = !result.side_to_move;
-        result.update_pin_info();
+        result.update_check_info();
 
         Some(result)
     }
@@ -528,23 +521,20 @@ impl Board {
         // If setting this piece down leaves my opponent in check, and it's my move, then the
         // position is not a valid chess board
         result.side_to_move = !result.side_to_move;
-        result.update_pin_info();
+        result.update_check_info();
         if result.checkers != EMPTY {
             return None;
         }
 
         // undo our damage
         result.side_to_move = !result.side_to_move;
-        result.update_pin_info();
+        result.update_check_info();
 
         Some(result)
     }
 
     /// Switch the color of the player without actually making a move.  Returns None if the current
     /// player is in check.
-    ///
-    /// Note that this erases the en-passant information, so applying this function twice does not
-    /// always give the same result back.
     ///
     /// ```
     /// use chess::{Board, Color};
@@ -564,8 +554,7 @@ impl Board {
         } else {
             let mut result = *self;
             result.side_to_move = !result.side_to_move;
-            result.remove_ep();
-            result.update_pin_info();
+            result.update_check_info();
             Some(result)
         }
     }
@@ -622,24 +611,10 @@ impl Board {
             return false;
         }
 
-        // make sure the en_passant square has a pawn on it of the right color
-        match self.en_passant {
-            None => {}
-            Some(x) => {
-                if self.pieces(Piece::Pawn)
-                    & self.color_combined(!self.side_to_move)
-                    & BitBoard::from_square(x)
-                    == EMPTY
-                {
-                    return false;
-                }
-            }
-        }
-
         // make sure my opponent is not currently in check (because that would be illegal)
         let mut board_copy = *self;
         board_copy.side_to_move = !board_copy.side_to_move;
-        board_copy.update_pin_info();
+        board_copy.update_check_info();
         if board_copy.checkers != EMPTY {
             return false;
         }
@@ -683,11 +658,6 @@ impl Board {
     #[inline]
     pub fn get_hash(&self) -> u64 {
         self.hash
-            ^ if let Some(ep) = self.en_passant {
-                Zobrist::en_passant(ep.get_file(), !self.side_to_move)
-            } else {
-                0
-            }
             ^ Zobrist::castles(
                 self.castle_rights[self.side_to_move.to_index()],
                 self.side_to_move,
@@ -769,58 +739,6 @@ impl Board {
         }
     }
 
-    /// Unset the en_passant square.
-    fn remove_ep(&mut self) {
-        self.en_passant = None;
-    }
-
-    /// Give me the en_passant square, if it exists.
-    ///
-    /// ```
-    /// use chess::{Board, ChessMove, Square};
-    ///
-    /// let move1 = ChessMove::new(Square::D2,
-    ///                            Square::D4,
-    ///                            None);
-    ///
-    /// let move2 = ChessMove::new(Square::H7,
-    ///                            Square::H5,
-    ///                            None);
-    ///
-    /// let move3 = ChessMove::new(Square::D4,
-    ///                            Square::D5,
-    ///                            None);
-    ///
-    /// let move4 = ChessMove::new(Square::E7,
-    ///                            Square::E5,
-    ///                            None);
-    ///
-    /// let board = Board::default().make_move_new(move1)
-    ///                             .make_move_new(move2)
-    ///                             .make_move_new(move3)
-    ///                             .make_move_new(move4);
-    ///
-    /// assert_eq!(board.en_passant(), Some(Square::E5));
-    /// ```
-    #[inline]
-    pub fn en_passant(self) -> Option<Square> {
-        self.en_passant
-    }
-
-    /// Set the en_passant square.  Note: This must only be called when self.en_passant is already
-    /// None.
-    fn set_ep(&mut self, sq: Square) {
-        // Only set self.en_passant if the pawn can actually be captured next move.
-        if get_adjacent_files(sq.get_file())
-            & get_rank(sq.get_rank())
-            & self.pieces(Piece::Pawn)
-            & self.color_combined(!self.side_to_move)
-            != EMPTY
-        {
-            self.en_passant = Some(sq);
-        }
-    }
-
     /// Is a particular move legal?  This function is very slow, but will work on unsanitized
     /// input.
     ///
@@ -862,9 +780,6 @@ impl Board {
     #[inline]
     pub fn make_move_new(&self, m: ChessMove) -> Board {
         let mut result = *self;
-        result.remove_ep();
-        result.checkers = EMPTY;
-        result.pinned = EMPTY;
         let source = m.get_source();
         let dest = m.get_dest();
 
@@ -891,11 +806,7 @@ impl Board {
             source,
         ));
 
-        let opp_king = result.pieces(Piece::King) & result.color_combined(!result.side_to_move);
-
         let castles = moved == Piece::King && (move_bb & get_castle_moves()) == move_bb;
-
-        let ksq = opp_king.to_square();
 
         const CASTLE_ROOK_START: [File; 8] = [
             File::A,
@@ -918,30 +829,10 @@ impl Board {
             File::F,
         ];
 
-        if moved == Piece::Knight {
-            result.checkers ^= get_knight_moves(ksq) & dest_bb;
-        } else if moved == Piece::Pawn {
-            if let Some(Piece::Knight) = m.get_promotion() {
-                result.xor(Piece::Pawn, dest_bb, self.side_to_move);
-                result.xor(Piece::Knight, dest_bb, self.side_to_move);
-                result.checkers ^= get_knight_moves(ksq) & dest_bb;
-            } else if let Some(promotion) = m.get_promotion() {
+        if moved == Piece::Pawn {
+            if let Some(promotion) = m.get_promotion() {
                 result.xor(Piece::Pawn, dest_bb, self.side_to_move);
                 result.xor(promotion, dest_bb, self.side_to_move);
-            } else if (source_bb & get_pawn_source_double_moves()) != EMPTY
-                && (dest_bb & get_pawn_dest_double_moves()) != EMPTY
-            {
-                result.set_ep(dest);
-                result.checkers ^= get_pawn_attacks(ksq, !result.side_to_move, dest_bb);
-            } else if Some(dest.ubackward(self.side_to_move)) == self.en_passant {
-                result.xor(
-                    Piece::Pawn,
-                    BitBoard::from_square(dest.ubackward(self.side_to_move)),
-                    !self.side_to_move,
-                );
-                result.checkers ^= get_pawn_attacks(ksq, !result.side_to_move, dest_bb);
-            } else {
-                result.checkers ^= get_pawn_attacks(ksq, !result.side_to_move, dest_bb);
             }
         } else if castles {
             let my_backrank = self.side_to_move.to_my_backrank();
@@ -955,21 +846,8 @@ impl Board {
             result.xor(Piece::Rook, start, self.side_to_move);
             result.xor(Piece::Rook, end, self.side_to_move);
         }
-        // now, lets see if we're in check or pinned
-        let attackers = result.color_combined(result.side_to_move)
-            & ((get_bishop_rays(ksq)
-                & (result.pieces(Piece::Bishop) | result.pieces(Piece::Queen)))
-                | (get_rook_rays(ksq)
-                    & (result.pieces(Piece::Rook) | result.pieces(Piece::Queen))));
-
-        for sq in attackers {
-            let between = between(sq, ksq) & result.combined();
-            if between == EMPTY {
-                result.checkers ^= BitBoard::from_square(sq);
-            } else if between.popcnt() == 1 {
-                result.pinned ^= between;
-            }
-        }
+        
+        result.update_check_info();
 
         result.side_to_move = !result.side_to_move;
         result
@@ -994,9 +872,6 @@ impl Board {
     #[inline]
     pub fn make_move(&self, m: ChessMove, result: &mut Board) {
         *result = *self;
-        result.remove_ep();
-        result.checkers = EMPTY;
-        result.pinned = EMPTY;
         let source = m.get_source();
         let dest = m.get_dest();
 
@@ -1023,11 +898,7 @@ impl Board {
             source,
         ));
 
-        let opp_king = result.pieces(Piece::King) & result.color_combined(!result.side_to_move);
-
         let castles = moved == Piece::King && (move_bb & get_castle_moves()) == move_bb;
-
-        let ksq = opp_king.to_square();
 
         const CASTLE_ROOK_START: [File; 8] = [
             File::A,
@@ -1050,30 +921,10 @@ impl Board {
             File::F,
         ];
 
-        if moved == Piece::Knight {
-            result.checkers ^= get_knight_moves(ksq) & dest_bb;
-        } else if moved == Piece::Pawn {
-            if let Some(Piece::Knight) = m.get_promotion() {
-                result.xor(Piece::Pawn, dest_bb, self.side_to_move);
-                result.xor(Piece::Knight, dest_bb, self.side_to_move);
-                result.checkers ^= get_knight_moves(ksq) & dest_bb;
-            } else if let Some(promotion) = m.get_promotion() {
+        if moved == Piece::Pawn {
+            if let Some(promotion) = m.get_promotion() {
                 result.xor(Piece::Pawn, dest_bb, self.side_to_move);
                 result.xor(promotion, dest_bb, self.side_to_move);
-            } else if (source_bb & get_pawn_source_double_moves()) != EMPTY
-                && (dest_bb & get_pawn_dest_double_moves()) != EMPTY
-            {
-                result.set_ep(dest);
-                result.checkers ^= get_pawn_attacks(ksq, !result.side_to_move, dest_bb);
-            } else if Some(dest.ubackward(self.side_to_move)) == self.en_passant {
-                result.xor(
-                    Piece::Pawn,
-                    BitBoard::from_square(dest.ubackward(self.side_to_move)),
-                    !self.side_to_move,
-                );
-                result.checkers ^= get_pawn_attacks(ksq, !result.side_to_move, dest_bb);
-            } else {
-                result.checkers ^= get_pawn_attacks(ksq, !result.side_to_move, dest_bb);
             }
         } else if castles {
             let my_backrank = self.side_to_move.to_my_backrank();
@@ -1087,60 +938,20 @@ impl Board {
             result.xor(Piece::Rook, start, self.side_to_move);
             result.xor(Piece::Rook, end, self.side_to_move);
         }
-        // now, lets see if we're in check or pinned
-        let attackers = result.color_combined(result.side_to_move)
-            & ((get_bishop_rays(ksq)
-                & (result.pieces(Piece::Bishop) | result.pieces(Piece::Queen)))
-                | (get_rook_rays(ksq)
-                    & (result.pieces(Piece::Rook) | result.pieces(Piece::Queen))));
 
-        for sq in attackers {
-            let between = between(sq, ksq) & result.combined();
-            if between == EMPTY {
-                result.checkers ^= BitBoard::from_square(sq);
-            } else if between.popcnt() == 1 {
-                result.pinned ^= between;
-            }
-        }
+        result.update_check_info();
 
         result.side_to_move = !result.side_to_move;
     }
 
-    /// Update the pin information.
-    fn update_pin_info(&mut self) {
-        self.pinned = EMPTY;
+    /// Update the check information.
+    fn update_check_info(&mut self) {
         self.checkers = EMPTY;
 
-        let ksq = (self.pieces(Piece::King) & self.color_combined(self.side_to_move)).to_square();
+        let ksq = self.king_square(!self.side_to_move);
 
-        let pinners = self.color_combined(!self.side_to_move)
-            & ((get_bishop_rays(ksq) & (self.pieces(Piece::Bishop) | self.pieces(Piece::Queen)))
-                | (get_rook_rays(ksq) & (self.pieces(Piece::Rook) | self.pieces(Piece::Queen))));
-
-        for sq in pinners {
-            let between = between(sq, ksq) & self.combined();
-            if between == EMPTY {
-                self.checkers ^= BitBoard::from_square(sq);
-            } else if between.popcnt() == 1 {
-                self.pinned ^= between;
-            }
-        }
-
-        self.checkers ^= get_knight_moves(ksq)
-            & self.color_combined(!self.side_to_move)
-            & self.pieces(Piece::Knight);
-
-        self.checkers ^= get_pawn_attacks(
-            ksq,
-            self.side_to_move,
-            self.color_combined(!self.side_to_move) & self.pieces(Piece::Pawn),
-        );
-    }
-
-    /// Give me the `BitBoard` of my pinned pieces.
-    #[inline]
-    pub fn pinned(&self) -> &BitBoard {
-        &self.pinned
+        self.checkers |= get_king_moves(ksq)
+            & self.color_combined(self.side_to_move);
     }
 
     /// Give me the `Bitboard` of the pieces putting me in check.
@@ -1171,18 +982,12 @@ impl TryFrom<&BoardBuilder> for Board {
 
         board.side_to_move = fen.get_side_to_move();
 
-        if let Some(ep) = fen.get_en_passant() {
-            board.side_to_move = !board.side_to_move;
-            board.set_ep(ep);
-            board.side_to_move = !board.side_to_move;
-        }
-
         #[allow(deprecated)]
         board.add_castle_rights(Color::White, fen.get_castle_rights(Color::White));
         #[allow(deprecated)]
         board.add_castle_rights(Color::Black, fen.get_castle_rights(Color::Black));
 
-        board.update_pin_info();
+        board.update_check_info();
 
         if board.is_sane() {
             Ok(board)
@@ -1214,13 +1019,4 @@ impl FromStr for Board {
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         Ok(BoardBuilder::from_str(value)?.try_into()?)
     }
-}
-
-#[test]
-fn test_null_move_en_passant() {
-    let start =
-        Board::from_str("rnbqkbnr/pppp2pp/8/4pP2/8/8/PPPP1PPP/RNBQKBNR w KQkq e6 0 0").unwrap();
-    let expected =
-        Board::from_str("rnbqkbnr/pppp2pp/8/4pP2/8/8/PPPP1PPP/RNBQKBNR b KQkq - 0 0").unwrap();
-    assert_eq!(start.null_move().unwrap(), expected);
 }

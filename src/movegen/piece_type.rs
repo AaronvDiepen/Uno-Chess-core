@@ -6,15 +6,22 @@ use crate::piece::Piece;
 use crate::square::Square;
 
 use crate::magic::{
-    between, get_adjacent_files, get_bishop_moves, get_bishop_rays, get_king_moves,
-    get_knight_moves, get_pawn_attacks, get_pawn_moves, get_rank, get_rook_moves, get_rook_rays,
-    line,
+    get_bishop_moves, get_king_moves, get_knight_moves, get_pawn_attacks, get_pawn_moves, get_rook_moves,
 };
 
 pub trait PieceType {
     fn is(piece: Piece) -> bool;
     fn into_piece() -> Piece;
     #[inline(always)]
+    fn captures(src: Square, color: Color, combined: BitBoard, board: &Board) -> BitBoard
+    {
+        (
+            (get_bishop_moves(src, combined) & (board.pieces(Piece::Bishop) | board.pieces(Piece::Queen)))
+            | (get_rook_moves(src, combined) & (board.pieces(Piece::Rook) | board.pieces(Piece::Queen)))
+            | (get_pawn_attacks(src, color, *board.pieces(Piece::Pawn)))
+            | (get_knight_moves(src) & board.pieces(Piece::Knight))
+        ) & board.color_combined(!color)
+    }
     fn pseudo_legals(src: Square, color: Color, combined: BitBoard, mask: BitBoard) -> BitBoard;
     #[inline(always)]
     fn legals<T>(movelist: &mut MoveList, board: &Board, mask: BitBoard)
@@ -23,31 +30,21 @@ pub trait PieceType {
     {
         let combined = board.combined();
         let color = board.side_to_move();
-        let my_pieces = board.color_combined(color);
-        let ksq = board.king_square(color);
-
-        let pieces = board.pieces(Self::into_piece()) & my_pieces;
-        let pinned = board.pinned();
+        let pieces = board.pieces(Self::into_piece()) & board.color_combined(color);
         let checkers = board.checkers();
 
-        let check_mask = if T::IN_CHECK {
-            between(checkers.to_square(), ksq) ^ checkers
-        } else {
-            !EMPTY
-        };
-
-        for src in pieces & !pinned {
-            let moves = Self::pseudo_legals(src, color, *combined, mask) & check_mask;
-            if moves != EMPTY {
-                unsafe {
-                    movelist.push_unchecked(SquareAndBitBoard::new(src, moves, false));
+        if T::IN_CHECK {
+            for src in pieces {
+                let moves = (Self::pseudo_legals(src, color, *combined, mask) | Self::captures(src, color, *combined, &board)) & checkers;
+                if moves != EMPTY {
+                    unsafe {
+                        movelist.push_unchecked(SquareAndBitBoard::new(src, moves, false));
+                    }
                 }
             }
-        }
-
-        if !T::IN_CHECK {
-            for src in pieces & pinned {
-                let moves = Self::pseudo_legals(src, color, *combined, mask) & line(src, ksq);
+        } else {
+            for src in pieces {
+                let moves = Self::pseudo_legals(src, color, *combined, mask) | Self::captures(src, color, *combined, &board);
                 if moves != EMPTY {
                     unsafe {
                         movelist.push_unchecked(SquareAndBitBoard::new(src, moves, false));
@@ -80,39 +77,6 @@ impl CheckType for NotInCheckType {
     const IN_CHECK: bool = false;
 }
 
-impl PawnType {
-    /// Is a particular en-passant capture legal?
-    pub fn legal_ep_move(board: &Board, source: Square, dest: Square) -> bool {
-        let combined = board.combined()
-            ^ BitBoard::from_square(board.en_passant().unwrap())
-            ^ BitBoard::from_square(source)
-            ^ BitBoard::from_square(dest);
-
-        let ksq =
-            (board.pieces(Piece::King) & board.color_combined(board.side_to_move())).to_square();
-
-        let rooks = (board.pieces(Piece::Rook) | board.pieces(Piece::Queen))
-            & board.color_combined(!board.side_to_move());
-
-        if (get_rook_rays(ksq) & rooks) != EMPTY {
-            if (get_rook_moves(ksq, combined) & rooks) != EMPTY {
-                return false;
-            }
-        }
-
-        let bishops = (board.pieces(Piece::Bishop) | board.pieces(Piece::Queen))
-            & board.color_combined(!board.side_to_move());
-
-        if (get_bishop_rays(ksq) & bishops) != EMPTY {
-            if (get_bishop_moves(ksq, combined) & bishops) != EMPTY {
-                return false;
-            }
-        }
-
-        return true;
-    }
-}
-
 impl PieceType for PawnType {
     fn is(piece: Piece) -> bool {
         piece == Piece::Pawn
@@ -134,59 +98,57 @@ impl PieceType for PawnType {
     {
         let combined = board.combined();
         let color = board.side_to_move();
-        let my_pieces = board.color_combined(color);
-        let ksq = board.king_square(color);
-
-        let pieces = board.pieces(Self::into_piece()) & my_pieces;
-        let pinned = board.pinned();
+        let pieces = board.pieces(Self::into_piece()) & board.color_combined(color);
         let checkers = board.checkers();
 
-        let check_mask = if T::IN_CHECK {
-            between(checkers.to_square(), ksq) ^ checkers
-        } else {
-            !EMPTY
-        };
+        if T::IN_CHECK {
+            for src in pieces {
+                let moves = (Self::pseudo_legals(src, color, *combined, mask) | Self::captures(src, color, *combined, &board)) & checkers;
+                let promotions = color.to_promotion_board();
+                let normal_moves = moves & !promotions;
+                let promotion_moves = moves & promotions;
 
-        for src in pieces & !pinned {
-            let moves = Self::pseudo_legals(src, color, *combined, mask) & check_mask;
-            if moves != EMPTY {
-                unsafe {
-                    movelist.push_unchecked(SquareAndBitBoard::new(
-                        src,
-                        moves,
-                        src.get_rank() == color.to_seventh_rank(),
-                    ));
-                }
-            }
-        }
-
-        if !T::IN_CHECK {
-            for src in pieces & pinned {
-                let moves = Self::pseudo_legals(src, color, *combined, mask) & line(ksq, src);
-                if moves != EMPTY {
+                if normal_moves != EMPTY {
                     unsafe {
                         movelist.push_unchecked(SquareAndBitBoard::new(
                             src,
-                            moves,
-                            src.get_rank() == color.to_seventh_rank(),
+                            normal_moves,
+                            false,
+                        ));
+                    }
+                }
+                if promotion_moves != EMPTY {
+                    unsafe {
+                        movelist.push_unchecked(SquareAndBitBoard::new(
+                            src,
+                            promotion_moves,
+                            true,
                         ));
                     }
                 }
             }
-        }
+        } else {
+            for src in pieces {
+                let moves = Self::pseudo_legals(src, color, *combined, mask) | Self::captures(src, color, *combined, &board);
+                let promotions = color.to_promotion_board();
+                let normal_moves = moves & !promotions;
+                let promotion_moves = moves & promotions;
 
-        if board.en_passant().is_some() {
-            let ep_sq = board.en_passant().unwrap();
-            let rank = get_rank(ep_sq.get_rank());
-            let files = get_adjacent_files(ep_sq.get_file());
-            for src in rank & files & pieces {
-                let dest = ep_sq.uforward(color);
-                if PawnType::legal_ep_move(board, src, dest) {
+                if normal_moves != EMPTY {
                     unsafe {
                         movelist.push_unchecked(SquareAndBitBoard::new(
                             src,
-                            BitBoard::from_square(dest),
+                            normal_moves,
                             false,
+                        ));
+                    }
+                }
+                if promotion_moves != EMPTY {
+                    unsafe {
+                        movelist.push_unchecked(SquareAndBitBoard::new(
+                            src,
+                            promotion_moves,
+                            true,
                         ));
                     }
                 }
@@ -222,43 +184,6 @@ impl PieceType for KnightType {
     #[inline(always)]
     fn pseudo_legals(src: Square, _color: Color, _combined: BitBoard, mask: BitBoard) -> BitBoard {
         get_knight_moves(src) & mask
-    }
-
-    #[inline(always)]
-    fn legals<T>(movelist: &mut MoveList, board: &Board, mask: BitBoard)
-    where
-        T: CheckType,
-    {
-        let combined = board.combined();
-        let color = board.side_to_move();
-        let my_pieces = board.color_combined(color);
-        let ksq = board.king_square(color);
-
-        let pieces = board.pieces(Self::into_piece()) & my_pieces;
-        let pinned = board.pinned();
-        let checkers = board.checkers();
-
-        if T::IN_CHECK {
-            let check_mask = between(checkers.to_square(), ksq) ^ checkers;
-
-            for src in pieces & !pinned {
-                let moves = Self::pseudo_legals(src, color, *combined, mask & check_mask);
-                if moves != EMPTY {
-                    unsafe {
-                        movelist.push_unchecked(SquareAndBitBoard::new(src, moves, false));
-                    }
-                }
-            }
-        } else {
-            for src in pieces & !pinned {
-                let moves = Self::pseudo_legals(src, color, *combined, mask);
-                if moves != EMPTY {
-                    unsafe {
-                        movelist.push_unchecked(SquareAndBitBoard::new(src, moves, false));
-                    }
-                }
-            }
-        };
     }
 }
 
@@ -296,37 +221,7 @@ impl KingType {
     /// Is a particular king move legal?
     #[inline(always)]
     pub fn legal_king_move(board: &Board, dest: Square) -> bool {
-        let combined = board.combined()
-            ^ (board.pieces(Piece::King) & board.color_combined(board.side_to_move()))
-            | BitBoard::from_square(dest);
-
-        let mut attackers = EMPTY;
-
-        let rooks = (board.pieces(Piece::Rook) | board.pieces(Piece::Queen))
-            & board.color_combined(!board.side_to_move());
-
-        attackers |= get_rook_moves(dest, combined) & rooks;
-
-        let bishops = (board.pieces(Piece::Bishop) | board.pieces(Piece::Queen))
-            & board.color_combined(!board.side_to_move());
-
-        attackers |= get_bishop_moves(dest, combined) & bishops;
-
-        let knight_rays = get_knight_moves(dest);
-        attackers |=
-            knight_rays & board.pieces(Piece::Knight) & board.color_combined(!board.side_to_move());
-
-        let king_rays = get_king_moves(dest);
-        attackers |=
-            king_rays & board.pieces(Piece::King) & board.color_combined(!board.side_to_move());
-
-        attackers |= get_pawn_attacks(
-            dest,
-            board.side_to_move(),
-            board.pieces(Piece::Pawn) & board.color_combined(!board.side_to_move()),
-        );
-
-        return attackers == EMPTY;
+        get_king_moves(dest) & board.color_combined(!board.side_to_move()) == EMPTY
     }
 }
 
@@ -353,7 +248,7 @@ impl PieceType for KingType {
         let color = board.side_to_move();
         let ksq = board.king_square(color);
 
-        let mut moves = Self::pseudo_legals(ksq, color, *combined, mask);
+        let mut moves = Self::pseudo_legals(ksq, color, *combined, mask) | Self::captures(ksq, color, *combined, &board);
 
         let copy = moves;
         for dest in copy {
@@ -395,6 +290,7 @@ impl PieceType for KingType {
                 }
             }
         }
+
         if moves != EMPTY {
             unsafe {
                 movelist.push_unchecked(SquareAndBitBoard::new(ksq, moves, false));

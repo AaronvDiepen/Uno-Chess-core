@@ -1,6 +1,5 @@
 use crate::castle_rights::CastleRights;
 use crate::color::{Color, NUM_COLORS};
-use crate::file::{File, NUM_FILES};
 use crate::piece::{Piece, NUM_PIECES};
 use crate::square::{Square, NUM_SQUARES};
 
@@ -29,15 +28,6 @@ impl Zobrist {
             *ZOBRIST_CASTLES
                 .get_unchecked(color.to_index())
                 .get_unchecked(castle_rights.to_index())
-        }
-    }
-
-    #[inline]
-    pub fn en_passant(file: File, color: Color) -> u64 {
-        unsafe {
-            *ZOBRIST_EP
-                .get_unchecked(color.to_index())
-                .get_unchecked(file.to_index())
         }
     }
 

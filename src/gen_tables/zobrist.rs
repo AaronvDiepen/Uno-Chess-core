@@ -2,7 +2,6 @@ use std::fs::File;
 use std::io::Write;
 // we use the same types as the rest of the library.
 use crate::color::NUM_COLORS;
-use crate::file::NUM_FILES;
 use crate::piece::NUM_PIECES;
 use crate::square::NUM_SQUARES;
 use rand::rngs::SmallRng;
@@ -42,17 +41,6 @@ pub fn write_zobrist(f: &mut File) {
         }
         if i != NUM_COLORS - 1 {
             write!(f, "  ], [\n").unwrap();
-        }
-    }
-    write!(f, "]];\n\n").unwrap();
-
-    write!(f, "const ZOBRIST_EP: [[u64; NUM_FILES]; NUM_COLORS] = [[\n").unwrap();
-    for i in 0..NUM_COLORS {
-        for _ in 0..NUM_FILES {
-            write!(f, "    {},\n", rng.next_u64()).unwrap();
-        }
-        if i != NUM_COLORS - 1 {
-            write!(f, "], [\n").unwrap();
         }
     }
     write!(f, "]];\n\n").unwrap();

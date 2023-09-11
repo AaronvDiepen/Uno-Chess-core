@@ -8,7 +8,6 @@ use crate::square::Square;
 use arrayvec::ArrayVec;
 use nodrop::NoDrop;
 use std::iter::ExactSizeIterator;
-use std::mem;
 
 #[derive(Copy, Clone, PartialEq, PartialOrd)]
 pub struct SquareAndBitBoard {
@@ -94,9 +93,9 @@ impl MoveGen {
     #[inline(always)]
     fn enumerate_moves(board: &Board) -> MoveList {
         let checkers = *board.checkers();
-        let mask = !board.color_combined(board.side_to_move());
+        let mask = !board.combined();
         let mut movelist = NoDrop::new(ArrayVec::<SquareAndBitBoard, 18>::new());
-
+        
         if checkers == EMPTY {
             PawnType::legals::<NotInCheckType>(&mut movelist, &board, mask);
             KnightType::legals::<NotInCheckType>(&mut movelist, &board, mask);
@@ -191,16 +190,7 @@ impl MoveGen {
             Piece::Bishop => true,
             Piece::Knight => true,
             Piece::Queen => true,
-            Piece::Pawn => {
-                if chess_move.get_source().get_file() != chess_move.get_dest().get_file()
-                    && board.piece_on(chess_move.get_dest()).is_none()
-                {
-                    // en-passant
-                    PawnType::legal_ep_move(board, chess_move.get_source(), chess_move.get_dest())
-                } else {
-                    true
-                }
-            }
+            Piece::Pawn => true,
             Piece::King => {
                 let bb = between(chess_move.get_source(), chess_move.get_dest());
                 if bb.popcnt() == 1 {
@@ -250,7 +240,7 @@ impl MoveGen {
         } else {
             iterable.set_iterator_mask(*targets);
             for x in &mut iterable {
-                let mut bresult = mem::MaybeUninit::<Board>::uninit();
+                let mut bresult = std::mem::MaybeUninit::<Board>::uninit();
                 unsafe {
                     board.make_move(x, &mut *bresult.as_mut_ptr());
                     result += MoveGen::movegen_perft_test(&*bresult.as_ptr(), depth - 1);
@@ -258,7 +248,7 @@ impl MoveGen {
             }
             iterable.set_iterator_mask(!EMPTY);
             for x in &mut iterable {
-                let mut bresult = mem::MaybeUninit::<Board>::uninit();
+                let mut bresult = std::mem::MaybeUninit::<Board>::uninit();
                 unsafe {
                     board.make_move(x, &mut *bresult.as_mut_ptr());
                     result += MoveGen::movegen_perft_test(&*bresult.as_ptr(), depth - 1);

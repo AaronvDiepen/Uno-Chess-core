@@ -52,7 +52,6 @@ pub struct BoardBuilder {
     pieces: [Option<(Piece, Color)>; 64],
     side_to_move: Color,
     castle_rights: [CastleRights; 2],
-    en_passant: Option<File>,
 }
 
 impl BoardBuilder {
@@ -60,7 +59,6 @@ impl BoardBuilder {
     ///
     /// * No pieces are on the board
     /// * `CastleRights` are empty for both sides
-    /// * `en_passant` is not set
     /// * `side_to_move` is Color::White
     /// ```
     /// use chess::{BoardBuilder, Board, Square, Color, Piece};
@@ -80,7 +78,6 @@ impl BoardBuilder {
             pieces: [None; 64],
             side_to_move: Color::White,
             castle_rights: [CastleRights::NoRights, CastleRights::NoRights],
-            en_passant: None,
         }
     }
 
@@ -109,13 +106,11 @@ impl BoardBuilder {
         side_to_move: Color,
         white_castle_rights: CastleRights,
         black_castle_rights: CastleRights,
-        en_passant: Option<File>,
     ) -> BoardBuilder {
         let mut result = BoardBuilder {
             pieces: [None; 64],
             side_to_move: side_to_move,
             castle_rights: [white_castle_rights, black_castle_rights],
-            en_passant: en_passant,
         };
 
         for piece in pieces.into_iter() {
@@ -147,24 +142,6 @@ impl BoardBuilder {
     /// ```
     pub fn get_castle_rights(&self, color: Color) -> CastleRights {
         self.castle_rights[color.to_index()]
-    }
-
-    /// Get the current en_passant square
-    ///
-    /// ```
-    /// use chess::{BoardBuilder, Board, Square, ChessMove};
-    ///
-    /// let board = Board::default()
-    ///     .make_move_new(ChessMove::new(Square::E2, Square::E4, None))
-    ///     .make_move_new(ChessMove::new(Square::H7, Square::H6, None))
-    ///     .make_move_new(ChessMove::new(Square::E4, Square::E5, None))
-    ///     .make_move_new(ChessMove::new(Square::D7, Square::D5, None));
-    /// let bb: BoardBuilder = board.into();
-    /// assert_eq!(bb.get_en_passant(), Some(Square::D5));
-    /// ```
-    pub fn get_en_passant(&self) -> Option<Square> {
-        self.en_passant
-            .map(|f| Square::make_square((!self.get_side_to_move()).to_fourth_rank(), f))
     }
 
     /// Set the side to move on the position
@@ -243,22 +220,6 @@ impl BoardBuilder {
         self[square] = None;
         self
     }
-
-    /// Set or clear the en_passant `File`.
-    ///
-    /// This function can be used directly or in a builder pattern.
-    ///
-    /// ```
-    /// use chess::{BoardBuilder, Square, Board, File, Color, Piece};
-    ///
-    /// BoardBuilder::new()
-    ///              .piece(Square::E4, Piece::Pawn, Color::White)
-    ///              .en_passant(Some(File::E));
-    /// ```
-    pub fn en_passant<'a>(&'a mut self, file: Option<File>) -> &'a mut Self {
-        self.en_passant = file;
-        self
-    }
 }
 
 impl Index<Square> for BoardBuilder {
@@ -329,11 +290,7 @@ impl fmt::Display for BoardBuilder {
         }
 
         write!(f, " ")?;
-        if let Some(sq) = self.get_en_passant() {
-            write!(f, "{}", sq)?;
-        } else {
-            write!(f, "-")?;
-        }
+        write!(f, "-")?;
 
         write!(f, " 0 1")
     }
@@ -363,7 +320,6 @@ impl FromStr for BoardBuilder {
         let pieces = tokens[0];
         let side = tokens[1];
         let castles = tokens[2];
-        let ep = tokens[3];
 
         for x in pieces.chars() {
             match x {
@@ -472,10 +428,6 @@ impl FromStr for BoardBuilder {
             fen.castle_rights[Color::Black.to_index()] = CastleRights::NoRights;
         }
 
-        if let Ok(sq) = Square::from_str(&ep) {
-            fen = fen.en_passant(Some(sq.get_file()));
-        }
-
         Ok(*fen)
     }
 }
@@ -495,7 +447,6 @@ impl From<&Board> for BoardBuilder {
             board.side_to_move(),
             board.castle_rights(Color::White),
             board.castle_rights(Color::Black),
-            board.en_passant().map(|sq| sq.get_file()),
         )
     }
 }
